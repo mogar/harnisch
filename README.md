@@ -10,7 +10,7 @@
 ## Build and run
 
 ```sh
-go mod tidy          # no-op here: no external deps
+go mod tidy
 go vet ./...         # static checks; run this constantly
 go test ./...        # replay tests, no Ollama server needed
 go build -o bin/agent ./harnisch/agent

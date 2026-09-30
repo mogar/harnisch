@@ -86,7 +86,8 @@ func (r *Reader) ReadLine() (string, error) {
 	}
 
 	if r.fd >= 0 {
-		if w, h, err := term.GetSize(r.fd); err == nil {
+		// Some ptys report 0x0; x/term would then wrap after every character.
+		if w, h, err := term.GetSize(r.fd); err == nil && w > 0 {
 			r.t.SetSize(w, h)
 		}
 		state, err := term.MakeRaw(r.fd)

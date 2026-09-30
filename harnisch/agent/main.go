@@ -4,17 +4,18 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"strings"
 	"syscall"
 
 	"github.com/mogar/harnisch/internal/agent"
+	"github.com/mogar/harnisch/internal/lineedit"
 	"github.com/mogar/harnisch/internal/provider/ollama"
 	"github.com/mogar/harnisch/internal/tool"
 )
@@ -71,16 +72,22 @@ func run() error {
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
 	defer signal.Stop(sigCh)
 
-	in := bufio.NewScanner(os.Stdin)
-	in.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	rl := lineedit.New(os.Stdin, os.Stdout, "> ")
 
 	for {
-		fmt.Print("\n> ")
-		if !in.Scan() { // Ctrl-D
+		fmt.Println()
+		raw, err := rl.ReadLine()
+		if errors.Is(err, lineedit.ErrInterrupt) {
+			continue
+		}
+		if errors.Is(err, io.EOF) { // Ctrl-D
 			fmt.Println()
 			break
 		}
-		line := strings.TrimSpace(in.Text())
+		if err != nil {
+			return err
+		}
+		line := strings.TrimSpace(raw)
 		if line == "" {
 			continue
 		}
@@ -93,6 +100,13 @@ func run() error {
 				a.Usage.InputTokens, a.Usage.OutputTokens,
 				a.Usage.CacheReadTokens, a.Usage.CacheWriteTokens)
 			continue
+		}
+
+		// Drop a Ctrl-C that arrived while no turn was running (only possible
+		// when stdin isn't a terminal) so it doesn't cancel this turn.
+		select {
+		case <-sigCh:
+		default:
 		}
 
 		// Fresh context on each turn
@@ -109,7 +123,7 @@ func run() error {
 			}
 		}()
 
-		err := a.Turn(turnCtx, line, os.Stdout)
+		err = a.Turn(turnCtx, line, os.Stdout)
 		close(done)
 		cancel() // always call cancel to avoid context leaks
 
@@ -118,5 +132,5 @@ func run() error {
 			fmt.Fprintln(os.Stderr, "turn failed: ", err)
 		}
 	}
-	return in.Err()
+	return nil
 }
