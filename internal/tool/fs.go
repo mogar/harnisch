@@ -237,3 +237,81 @@ func (fr FindReplaceInFile) Execute(ctx context.Context, input json.RawMessage) 
 	}
 	return Truncate(strings.Join(lines, "\n")), nil
 }
+
+// grep
+
+type Grep struct{ Root *Root }
+
+func (Grep) Name() string {
+	return "grep"
+}
+
+func (Grep) Description() string {
+	return "Search for a pattern in files within the workspace. Returns matching lines with 1-based line numbers prefixed."
+}
+
+func (Grep) Schema() json.RawMessage {
+	return json.RawMessage(`{
+		"type": "object",
+		"properties": {
+			"pattern": {
+				"type": "string",
+				"description": "The pattern to search for."
+			},
+			"path": {
+				"type": "string",
+				"description": "The path to the directory to search, relative to the workspace root."
+			}
+		},
+		"required": ["pattern"]
+	}`)
+}
+
+func (Grep) ReadOnly() bool {
+	return true
+}
+
+func (g Grep) Execute(ctx context.Context, input json.RawMessage) (string, error) {
+	var params struct {
+		Pattern string `json:"pattern"`
+		Path    string `json:"path"`
+	}
+	if err := json.Unmarshal(input, &params); err != nil {
+		return "", fmt.Errorf("failed to unmarshal input: %w", err)
+	}
+	if params.Path == "" {
+		params.Path = "."
+	}
+	resolvedPath, err := g.Root.ResolvePath(params.Path)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve path: %w", err)
+	}
+	var matches []string
+	err = filepath.WalkDir(resolvedPath, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() || strings.HasPrefix(d.Name(), ".") {
+			return nil // Skip directories and hidden files.
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		lines := strings.Split(string(data), "\n")
+		for i, line := range lines {
+			if strings.Contains(line, params.Pattern) {
+				relPath, _ := filepath.Rel(g.Root.Dir(), path)
+				matches = append(matches, fmt.Sprintf("%s:%d: %s", relPath, i+1, line))
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return "", fmt.Errorf("failed to search files: %w", err)
+	}
+	if len(matches) == 0 {
+		return "(no matches found)", nil
+	}
+	return Truncate(strings.Join(matches, "\n")), nil
+}
