@@ -1,8 +1,8 @@
 // Define the canonical conversation model.
 //
 // This package defines an ontology for LLM chats. It includes types for the various phases of a chat,
-// including text, thinking, tool-use, etc. It is intended to be a superset of all possible chat formats, 
-// and to be compatible with OpenAI/Anthropic/ollama chat formats. Individual provider libraries may 
+// including text, thinking, tool-use, etc. It is intended to be a superset of all possible chat formats,
+// and to be compatible with OpenAI/Anthropic/ollama chat formats. Individual provider libraries may
 // downgrade to what they are capable of.
 package chat
 
@@ -14,16 +14,16 @@ import (
 type Role string
 
 const (
-	RoleUser	  Role = "user"
+	RoleUser      Role = "user"
 	RoleAssistant Role = "assistant"
 )
 
 type BlockKind string
 
 const (
-	KindText	   BlockKind = "text"
+	KindText       BlockKind = "text"
 	KindThinking   BlockKind = "thinking"
-	KindToolUse	   BlockKind = "tool_use"
+	KindToolUse    BlockKind = "tool_use"
 	KindToolResult BlockKind = "tool_result"
 )
 
@@ -44,21 +44,21 @@ func (t Text) Kind() BlockKind {
 // Thinking is a Block of text that represents the model's internal reasoning.
 // Raw holds the provider's exact serialization (necessary for Anthropic).
 type Thinking struct {
-	Text string `json:"text"`
-	Raw json.RawMessage `json:"raw,omitempty"`
+	Text string          `json:"text"`
+	Raw  json.RawMessage `json:"raw,omitempty"`
 }
 
 func (t Thinking) Kind() BlockKind {
 	return KindThinking
 }
 
-// ToolUse is a Block that represents the model's request to use a tool. 
+// ToolUse is a Block that represents the model's request to use a tool.
 // ID is the tool's unique identifier (possibly generated internally if unused by the provider).
 // Name is the human-readable name of the tool.
 // Input is the input to the tool.
 type ToolUse struct {
-	ID    string `json:"id"`
-	Name  string `json:"name"`
+	ID    string          `json:"id"`
+	Name  string          `json:"name"`
 	Input json.RawMessage `json:"input"`
 }
 
@@ -83,7 +83,7 @@ func (t ToolResult) Kind() BlockKind {
 }
 
 // Message is a single message in a conversation, consisting of a role and a block.
-// Provider and Model record where the conversation came from (useful for mid-conversation 
+// Provider and Model record where the conversation came from (useful for mid-conversation
 // model switching).
 type Message struct {
 	Role     Role
@@ -92,7 +92,7 @@ type Message struct {
 	Model    string
 }
 
-// ToolUses returns every tool call in the message, in order. This keeps parallel tool calls 
+// ToolUses returns every tool call in the message, in order. This keeps parallel tool calls
 // representable.
 func (m Message) ToolUses() []ToolUse {
 	var toolUses []ToolUse
@@ -104,7 +104,7 @@ func (m Message) ToolUses() []ToolUse {
 	return toolUses
 }
 
-// TextContent concatenates all text blocks in the message, in order. This is useful for 
+// TextContent concatenates all text blocks in the message, in order. This is useful for
 // providers that don't support thinking or tool use.
 func (m Message) TextContent() string {
 	var text string
@@ -127,10 +127,10 @@ type wireBlock struct {
 }
 
 type wireMessage struct {
-	Role     Role         `json:"role"`
-	Blocks   []wireBlock  `json:"blocks"`
-	Provider string       `json:"provider"`
-	Model    string       `json:"model"`
+	Role     Role        `json:"role"`
+	Blocks   []wireBlock `json:"blocks"`
+	Provider string      `json:"provider"`
+	Model    string      `json:"model"`
 }
 
 func (m Message) MarshalJSON() ([]byte, error) {

@@ -11,7 +11,7 @@ import (
 )
 
 // Root defines the intended root directory for tool call. It is used to resolve relative paths in tool definitions.
-// Note that it does not serve a security purpose, and LLMs can still request arbitrary paths. 
+// Note that it does not serve a security purpose, and LLMs can still request arbitrary paths.
 type Root struct {
 	dir string
 }
@@ -58,7 +58,7 @@ func (r *Root) ResolvePath(path string) (string, error) {
 
 // Read File Tool
 
-type ReadFile struct { Root *Root }
+type ReadFile struct{ Root *Root }
 
 func (ReadFile) Name() string {
 	return "read_file"
@@ -109,7 +109,7 @@ func (rf ReadFile) Execute(ctx context.Context, input json.RawMessage) (string, 
 
 // List Directory Tool
 
-type ListDir struct { Root *Root }
+type ListDir struct{ Root *Root }
 
 func (ListDir) Name() string {
 	return "list_dir"

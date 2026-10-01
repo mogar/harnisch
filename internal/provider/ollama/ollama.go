@@ -16,16 +16,16 @@ import (
 )
 
 type Client struct {
-	Host string // Ollama host, e.g. "http://localhost:11434"
-	name string
+	Host  string // Ollama host, e.g. "http://localhost:11434"
+	name  string
 	model string
-	HTTP *http.Client
+	HTTP  *http.Client
 }
 
 func New(host, model string) *Client {
 	return &Client{
-		Host: strings.TrimRight(host, "/"),
-		name: "ollama",
+		Host:  strings.TrimRight(host, "/"),
+		name:  "ollama",
 		model: model,
 		HTTP: &http.Client{
 			Transport: &http.Transport{
@@ -45,12 +45,12 @@ func (c *Client) Model() string {
 
 func (c *Client) Capabilities() provider.Capabilities {
 	return provider.Capabilities{
-		Thinking: true,
-		ToolUse: true,
+		Thinking:          true,
+		ToolUse:           true,
 		ParallelToolCalls: false,
-		PromptCaching: false,
-		EditFormat: "whole_file", // small models can struggle with exact-match replacement
-		Images: false,
+		PromptCaching:     false,
+		EditFormat:        "whole_file", // small models can struggle with exact-match replacement
+		Images:            false,
 	}
 }
 
@@ -58,7 +58,7 @@ func (c *Client) Capabilities() provider.Capabilities {
 // Use struct fields instead of maps to ensure JSON key order is deterministic.
 
 type wireFunction struct {
-	Name string `json:"name"`
+	Name string          `json:"name"`
 	Args json.RawMessage `json:"arguments"`
 }
 
@@ -67,43 +67,43 @@ type wireToolCall struct {
 }
 
 type wireMessage struct {
-	Role string `json:"role"`
-	Content string `json:"content"`
-	Thinking string `json:"thinking,omitempty"`
-	ToolName string `json:"tool_name,omitempty"`
+	Role      string         `json:"role"`
+	Content   string         `json:"content"`
+	Thinking  string         `json:"thinking,omitempty"`
+	ToolName  string         `json:"tool_name,omitempty"`
 	ToolCalls []wireToolCall `json:"tool_calls,omitempty"`
 }
 
 type wireToolDef struct {
-	Type string `json:"type"`
+	Type     string `json:"type"`
 	Function struct {
-		Name string `json:"name"`
-		Description string `json:"description"`
-		Parameters json.RawMessage `json:"parameters"`
+		Name        string          `json:"name"`
+		Description string          `json:"description"`
+		Parameters  json.RawMessage `json:"parameters"`
 	} `json:"function"`
 }
 
 type wireRequest struct {
-	Model string `json:"model"`
-	Messages []wireMessage `json:"messages"`
-	Tools []wireToolDef `json:"tools,omitempty"`
-	Stream bool `json:"stream"`
-	Options map[string]any `json:"options,omitempty"`
+	Model    string         `json:"model"`
+	Messages []wireMessage  `json:"messages"`
+	Tools    []wireToolDef  `json:"tools,omitempty"`
+	Stream   bool           `json:"stream"`
+	Options  map[string]any `json:"options,omitempty"`
 }
 
 type wireChunk struct {
-	Message wireMessage `json:"message"`
-	Done bool `json:"done"`
-	PromptEvalCount int `json:"prompt_eval_count"`
-	EvalCount int `json:"eval_count"`
+	Message         wireMessage `json:"message"`
+	Done            bool        `json:"done"`
+	PromptEvalCount int         `json:"prompt_eval_count"`
+	EvalCount       int         `json:"eval_count"`
 }
 
 // Translation
 
 // Flatten canonical model into ollama's format.
 // Two lossy conversions:
-//  * one flat content string, so multiple text blocks are concatenated with newlines
-//  * tool results are separate messages with the role "tool", identified by name instead of ID
+//   - one flat content string, so multiple text blocks are concatenated with newlines
+//   - tool results are separate messages with the role "tool", identified by name instead of ID
 func toWire(msgs []chat.Message) []wireMessage {
 	var wireMsgs []wireMessage
 	for _, msg := range msgs {
@@ -126,18 +126,18 @@ func toWire(msgs []chat.Message) []wireMessage {
 				})
 			case chat.ToolResult:
 				results = append(results, wireMessage{
-					Role: "tool",
+					Role:     "tool",
 					ToolName: b.Name,
-					Content: b.Content,
+					Content:  b.Content,
 				})
 			}
 		}
 
 		if text.Len() > 0 || thinking.Len() > 0 || len(calls) > 0 {
 			wireMsgs = append(wireMsgs, wireMessage{
-				Role: string(msg.Role),
-				Content: text.String(),
-				Thinking: thinking.String(),
+				Role:      string(msg.Role),
+				Content:   text.String(),
+				Thinking:  thinking.String(),
 				ToolCalls: calls,
 			})
 		}
@@ -165,16 +165,16 @@ func (c *Client) Stream(ctx context.Context, req provider.Request) (<-chan provi
 	msgs := toWire(req.Messages)
 	if req.System != "" {
 		msgs = append([]wireMessage{{
-			Role: "system",
+			Role:    "system",
 			Content: req.System,
 		}}, msgs...)
 	}
 
 	body, err := json.Marshal(wireRequest{
-		Model: c.model,
+		Model:    c.model,
 		Messages: msgs,
-		Tools: toolDefs(req.Tools),
-		Stream: true,
+		Tools:    toolDefs(req.Tools),
+		Stream:   true,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
@@ -219,7 +219,7 @@ func (c *Client) Stream(ctx context.Context, req provider.Request) (<-chan provi
 				return
 			}
 
-			if t:= chunk.Message.Thinking; t != "" {
+			if t := chunk.Message.Thinking; t != "" {
 				if !send(ctx, events, provider.Event{Kind: provider.EventThinkingDelta, Text: t}) {
 					return
 				}
@@ -232,8 +232,8 @@ func (c *Client) Stream(ctx context.Context, req provider.Request) (<-chan provi
 			for _, call := range chunk.Message.ToolCalls {
 				callSeq++
 				toolUse := chat.ToolUse{
-					ID: fmt.Sprintf("call_%d_%d", callSeq, time.Now().UnixNano()),
-					Name: call.Function.Name,
+					ID:    fmt.Sprintf("call_%d_%d", callSeq, time.Now().UnixNano()),
+					Name:  call.Function.Name,
 					Input: call.Function.Args,
 				}
 				if !send(ctx, events, provider.Event{Kind: provider.EventToolCall, ToolUse: &toolUse}) {
@@ -243,7 +243,7 @@ func (c *Client) Stream(ctx context.Context, req provider.Request) (<-chan provi
 
 			if chunk.Done {
 				send(ctx, events, provider.Event{Kind: provider.EventUsage, Usage: &provider.Usage{
-					InputTokens: chunk.PromptEvalCount,
+					InputTokens:  chunk.PromptEvalCount,
 					OutputTokens: chunk.EvalCount,
 				}})
 				send(ctx, events, provider.Event{Kind: provider.EventDone})

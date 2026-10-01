@@ -9,7 +9,7 @@ import (
 	"sync"
 )
 
-// MaxResultBytes is the maximum number of bytes that a tool can return in its result. 
+// MaxResultBytes is the maximum number of bytes that a tool can return in its result.
 // This is to prevent tools from returning excessively large results that could overwhelm the system (or bill).
 const MaxResultBytes = 32 * 1024 // 32 KB
 
@@ -17,7 +17,7 @@ type Tool interface {
 	Name() string
 	Description() string
 	Schema() json.RawMessage // JSON Schema for the tool's input.
-	ReadOnly() bool // Whether the tool is read-only (does not modify state).
+	ReadOnly() bool          // Whether the tool is read-only (does not modify state).
 	Execute(ctx context.Context, input json.RawMessage) (string, error)
 }
 

@@ -16,18 +16,18 @@ import (
 
 type Agent struct {
 	Provider provider.Provider
-	Tools *tool.Registry
-	System string
+	Tools    *tool.Registry
+	System   string
 	MaxTurns int
 
 	Messages []chat.Message
-	Usage provider.Usage // accumulated across the session
+	Usage    provider.Usage // accumulated across the session
 }
 
 // Turn sends one user message and runs the loop to completion
 func (a *Agent) Turn(ctx context.Context, userText string, out io.Writer) error {
 	a.Messages = append(a.Messages, chat.Message{
-		Role: chat.RoleUser,
+		Role:   chat.RoleUser,
 		Blocks: []chat.Block{chat.Text{Text: userText}},
 	})
 
@@ -62,7 +62,7 @@ func (a *Agent) Turn(ctx context.Context, userText string, out io.Writer) error 
 		}
 
 		a.Messages = append(a.Messages, chat.Message{
-			Role: chat.RoleUser,
+			Role:   chat.RoleUser,
 			Blocks: results,
 		})
 
@@ -75,24 +75,24 @@ func (a *Agent) Turn(ctx context.Context, userText string, out io.Writer) error 
 
 func (a *Agent) stream(ctx context.Context, out io.Writer) (chat.Message, error) {
 	msg := chat.Message{
-		Role: chat.RoleAssistant,
+		Role:     chat.RoleAssistant,
 		Provider: a.Provider.Name(),
-		Model: a.Provider.Model(),
+		Model:    a.Provider.Model(),
 	}
 
 	var specs []provider.ToolSpec
 	for _, t := range a.Tools.All() {
 		specs = append(specs, provider.ToolSpec{
-			Name: t.Name(),
+			Name:        t.Name(),
 			Description: t.Description(),
-			Schema: t.Schema(),
+			Schema:      t.Schema(),
 		})
 	}
 
 	events, err := a.Provider.Stream(ctx, provider.Request{
-		System: a.System,
+		System:   a.System,
 		Messages: a.Messages,
-		Tools: specs,
+		Tools:    specs,
 	})
 	if err != nil {
 		return msg, fmt.Errorf("failed to start stream: %w", err)
@@ -151,12 +151,11 @@ func (a *Agent) execute(ctx context.Context, call chat.ToolUse, out io.Writer) c
 	}
 
 	return chat.ToolResult{
-		ID: call.ID,
-		Name: call.Name,
+		ID:      call.ID,
+		Name:    call.Name,
 		Content: tool.Truncate(result),
 	}
 }
-
 
 // settleOrphans guarantees every tool call has a tool result. This is necessary for some models.
 func (a *Agent) settleOrphans(assistant chat.Message, reason string) {
@@ -172,9 +171,9 @@ func (a *Agent) settleOrphans(assistant chat.Message, reason string) {
 }
 
 func errorResult(call chat.ToolUse, msg string) chat.ToolResult {
-	return chat.ToolResult {
-		ID: call.ID,
-		Name: call.Name,
+	return chat.ToolResult{
+		ID:      call.ID,
+		Name:    call.Name,
 		Content: "Error: " + msg,
 		IsError: true,
 	}

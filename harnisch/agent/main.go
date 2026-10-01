@@ -37,8 +37,8 @@ func main() {
 
 func run() error {
 	var (
-		host = flag.String("host", "http://localhost:11434", "Ollama server URL")
-		model = flag.String("model", "qwen3.5:35b", "model name")
+		host    = flag.String("host", "http://localhost:11434", "Ollama server URL")
+		model   = flag.String("model", "qwen3.5:35b", "model name")
 		rootDir = flag.String("root", ".", "workspace root; tools cannot escape it")
 	)
 	flag.Parse()
@@ -49,7 +49,7 @@ func run() error {
 	}
 
 	registry := tool.NewRegistry()
-	for _, t := range []tool.Tool {
+	for _, t := range []tool.Tool{
 		tool.ReadFile{Root: root},
 		tool.ListDir{Root: root},
 	} {
@@ -60,8 +60,8 @@ func run() error {
 
 	a := &agent.Agent{
 		Provider: ollama.New(*host, *model),
-		Tools: registry,
-		System: defaultSystemPrompt,
+		Tools:    registry,
+		System:   defaultSystemPrompt,
 	}
 
 	fmt.Printf("model: %s workspace %s\n", *model, root.Dir())
