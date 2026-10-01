@@ -172,3 +172,68 @@ func (ld ListDir) Execute(ctx context.Context, input json.RawMessage) (string, e
 	}
 	return Truncate(strings.Join(names, "\n")), nil
 }
+
+// Find and Replace in File tool
+
+type FindReplaceInFile struct{ Root *Root }
+
+func (FindReplaceInFile) Name() string {
+	return "find_replace_in_file"
+}
+
+func (FindReplaceInFile) Description() string {
+	return "Find and replace text in a file within the workspace. Returns the new contents of the file with 1-based line numbers prefixed."
+}
+
+func (FindReplaceInFile) Schema() json.RawMessage {
+	return json.RawMessage(`{
+		"type": "object",
+		"properties": {
+			"path": {
+				"type": "string",
+				"description": "The path to the file to modify, relative to the workspace root."
+			},
+			"old_text": {
+				"type": "string",
+				"description": "The text to find and replace."
+			},
+			"new_text": {
+				"type": "string",
+				"description": "The text to replace with."
+			}
+		},
+		"required": ["path", "old_text", "new_text"]
+	}`)
+}
+
+func (FindReplaceInFile) ReadOnly() bool {
+	return false
+}
+
+func (fr FindReplaceInFile) Execute(ctx context.Context, input json.RawMessage) (string, error) {
+	var params struct {
+		Path    string `json:"path"`
+		OldText string `json:"old_text"`
+		NewText string `json:"new_text"`
+	}
+	if err := json.Unmarshal(input, &params); err != nil {
+		return "", fmt.Errorf("failed to unmarshal input: %w", err)
+	}
+	resolvedPath, err := fr.Root.ResolvePath(params.Path)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve path: %w", err)
+	}
+	data, err := os.ReadFile(resolvedPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to read file: %w", err)
+	}
+	newData := strings.ReplaceAll(string(data), params.OldText, params.NewText)
+	if err := os.WriteFile(resolvedPath, []byte(newData), 0644); err != nil {
+		return "", fmt.Errorf("failed to write file: %w", err)
+	}
+	lines := strings.Split(newData, "\n")
+	for i, line := range lines {
+		lines[i] = fmt.Sprintf("%d: %s", i+1, line)
+	}
+	return Truncate(strings.Join(lines, "\n")), nil
+}

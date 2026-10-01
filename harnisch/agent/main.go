@@ -52,6 +52,7 @@ func run() error {
 	for _, t := range []tool.Tool{
 		tool.ReadFile{Root: root},
 		tool.ListDir{Root: root},
+		tool.FindReplaceInFile{Root: root},
 	} {
 		if err := registry.Register(t); err != nil {
 			return err

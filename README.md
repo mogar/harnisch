@@ -2,10 +2,7 @@
 
 ## TODO
 
-* hitting ^C puts it in the chat, and you have to hit enter to interrupt
-  * should just send the signal immediately to the chat without enter
-* no text response from model
-* backspace
+* multi-line support in input
 
 ## Build and run
 
