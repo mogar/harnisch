@@ -315,3 +315,65 @@ func (g Grep) Execute(ctx context.Context, input json.RawMessage) (string, error
 	}
 	return Truncate(strings.Join(matches, "\n")), nil
 }
+
+// Create File Tool
+
+type CreateFile struct{ Root *Root }
+
+func (CreateFile) Name() string {
+	return "create_file"
+}
+
+func (CreateFile) Description() string {
+	return "Create a file at the given path, optionally with provided string contents."
+}
+
+func (CreateFile) Schema() json.RawMessage {
+	return json.RawMessage(`{
+		"type": "object",
+		"properties": {
+			"path": {
+				"type": "string",
+				"description": "The path to the file to create, relative to the workspace root."
+			},
+			"contents": {
+				"type": "string",
+				"description": "Optional string contents to write to the file."
+			}
+		},
+		"required": ["path"]
+	}`)
+}
+
+func (CreateFile) ReadOnly() bool {
+	return false
+}
+
+func (cf CreateFile) Execute(ctx context.Context, input json.RawMessage) (string, error) {
+	var params struct {
+		Path     string `json:"path"`
+		Contents string `json:"contents"`
+	}
+	if err := json.Unmarshal(input, &params); err != nil {
+		return "", fmt.Errorf("failed to unmarshal input: %w", err)
+	}
+	resolvedPath, err := cf.Root.ResolvePath(params.Path)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve path: %w", err)
+	}
+	// Ensure parent directories exist.
+	dir := filepath.Dir(resolvedPath)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return "", fmt.Errorf("failed to create parent directories: %w", err)
+	}
+	// Write the file.
+	if err := os.WriteFile(resolvedPath, []byte(params.Contents), 0644); err != nil {
+		return "", fmt.Errorf("failed to write file: %w", err)
+	}
+	// Format with line numbers for consistency with other file tools.
+	lines := strings.Split(params.Contents, "\n")
+	for i, line := range lines {
+		lines[i] = fmt.Sprintf("%d: %s", i+1, line)
+	}
+	return Truncate(strings.Join(lines, "\n")), nil
+}

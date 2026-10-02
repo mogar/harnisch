@@ -54,6 +54,7 @@ func run() error {
 		tool.ListDir{Root: root},
 		tool.FindReplaceInFile{Root: root},
 		tool.Grep{Root: root},
+		tool.CreateFile{Root: root},
 	} {
 		if err := registry.Register(t); err != nil {
 			return err

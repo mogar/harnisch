@@ -33,7 +33,7 @@ func (a *Agent) Turn(ctx context.Context, userText string, out io.Writer) error 
 
 	maxTurns := a.MaxTurns
 	if maxTurns <= 0 {
-		maxTurns = 10
+		maxTurns = 100
 	}
 
 	for turn := 0; turn < maxTurns; turn++ {

@@ -3,6 +3,8 @@
 ## TODO
 
 * multi-line support in input
+* on maxTurns expiration, request to continue instead of stopping
+* change build target dir (bin ends up polluting grep results)
 
 ## Build and run
 
