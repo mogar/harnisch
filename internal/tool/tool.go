@@ -7,19 +7,42 @@ import (
 	"fmt"
 	"sort"
 	"sync"
+
+	"github.com/mogar/harnisch/internal/permissions"
 )
 
 // MaxResultBytes is the maximum number of bytes that a tool can return in its result.
 // This is to prevent tools from returning excessively large results that could overwhelm the system (or bill).
 const MaxResultBytes = 32 * 1024 // 32 KB
 
+// Tool runs in two phases so permission checks see exactly what will execute. Prepare parses and
+// validates the input and resolves any paths, without side effects; the returned Call reports what it
+// will touch and runs against those same resolved values.
 type Tool interface {
 	Name() string
 	Description() string
 	Schema() json.RawMessage // JSON Schema for the tool's input.
-	ReadOnly() bool          // Whether the tool is read-only (does not modify state).
-	Execute(ctx context.Context, input json.RawMessage) (string, error)
+	Prepare(input json.RawMessage) (Call, error)
 }
+
+// Call is a prepared tool invocation.
+type Call interface {
+	Accesses() []permissions.Access
+	Run(ctx context.Context) (string, error)
+}
+
+// NewCall builds a Call from a run function and the accesses it performs.
+func NewCall(run func(ctx context.Context) (string, error), accesses ...permissions.Access) Call {
+	return funcCall{run: run, accesses: accesses}
+}
+
+type funcCall struct {
+	run      func(ctx context.Context) (string, error)
+	accesses []permissions.Access
+}
+
+func (c funcCall) Accesses() []permissions.Access          { return c.accesses }
+func (c funcCall) Run(ctx context.Context) (string, error) { return c.run(ctx) }
 
 type Registry struct {
 	mu    sync.RWMutex

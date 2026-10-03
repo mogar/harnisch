@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/mogar/harnisch/internal/permissions"
 )
 
 // Root defines the intended root directory for tool call. It is used to resolve relative paths in tool definitions.
@@ -111,30 +113,28 @@ func (ReadFile) Schema() json.RawMessage {
 	}`)
 }
 
-func (ReadFile) ReadOnly() bool {
-	return true
-}
-
-func (rf ReadFile) Execute(ctx context.Context, input json.RawMessage) (string, error) {
+func (rf ReadFile) Prepare(input json.RawMessage) (Call, error) {
 	var params struct {
 		Path string `json:"path"`
 	}
 	if err := json.Unmarshal(input, &params); err != nil {
-		return "", fmt.Errorf("failed to unmarshal input: %w", err)
+		return nil, fmt.Errorf("failed to unmarshal input: %w", err)
 	}
 	resolvedPath, err := rf.Root.ResolvePath(params.Path)
 	if err != nil {
-		return "", fmt.Errorf("failed to resolve path: %w", err)
+		return nil, fmt.Errorf("failed to resolve path: %w", err)
 	}
-	data, err := os.ReadFile(resolvedPath)
-	if err != nil {
-		return "", fmt.Errorf("failed to read file: %w", err)
-	}
-	lines := strings.Split(string(data), "\n")
-	for i, line := range lines {
-		lines[i] = fmt.Sprintf("%d: %s", i+1, line)
-	}
-	return Truncate(strings.Join(lines, "\n")), nil
+	return NewCall(func(ctx context.Context) (string, error) {
+		data, err := os.ReadFile(resolvedPath)
+		if err != nil {
+			return "", fmt.Errorf("failed to read file: %w", err)
+		}
+		lines := strings.Split(string(data), "\n")
+		for i, line := range lines {
+			lines[i] = fmt.Sprintf("%d: %s", i+1, line)
+		}
+		return Truncate(strings.Join(lines, "\n")), nil
+	}, permissions.Access{Op: permissions.OpRead, Path: resolvedPath}), nil
 }
 
 // List Directory Tool
@@ -162,11 +162,7 @@ func (ListDir) Schema() json.RawMessage {
 	}`)
 }
 
-func (ListDir) ReadOnly() bool {
-	return true
-}
-
-func (ld ListDir) Execute(ctx context.Context, input json.RawMessage) (string, error) {
+func (ld ListDir) Prepare(input json.RawMessage) (Call, error) {
 	var params struct {
 		Path string `json:"path"`
 	}
@@ -179,28 +175,30 @@ func (ld ListDir) Execute(ctx context.Context, input json.RawMessage) (string, e
 	}
 	resolvedPath, err := ld.Root.ResolvePath(params.Path)
 	if err != nil {
-		return "", fmt.Errorf("failed to resolve path: %w", err)
+		return nil, fmt.Errorf("failed to resolve path: %w", err)
 	}
-	entries, err := os.ReadDir(resolvedPath)
-	if err != nil {
-		return "", fmt.Errorf("failed to read directory: %w", err)
-	}
-	names := make([]string, 0, len(entries))
-	for _, entry := range entries {
-		if strings.HasPrefix(entry.Name(), ".") {
-			continue // Skip hidden files and directories.
+	return NewCall(func(ctx context.Context) (string, error) {
+		entries, err := os.ReadDir(resolvedPath)
+		if err != nil {
+			return "", fmt.Errorf("failed to read directory: %w", err)
 		}
-		if entry.IsDir() {
-			names = append(names, entry.Name()+"/")
-		} else {
-			names = append(names, entry.Name())
+		names := make([]string, 0, len(entries))
+		for _, entry := range entries {
+			if strings.HasPrefix(entry.Name(), ".") {
+				continue // Skip hidden files and directories.
+			}
+			if entry.IsDir() {
+				names = append(names, entry.Name()+"/")
+			} else {
+				names = append(names, entry.Name())
+			}
 		}
-	}
-	sort.Strings(names)
-	if len(names) == 0 {
-		return "(empty directory)", nil
-	}
-	return Truncate(strings.Join(names, "\n")), nil
+		sort.Strings(names)
+		if len(names) == 0 {
+			return "(empty directory)", nil
+		}
+		return Truncate(strings.Join(names, "\n")), nil
+	}, permissions.Access{Op: permissions.OpRead, Path: resolvedPath}), nil
 }
 
 // Find and Replace in File tool
@@ -236,36 +234,34 @@ func (FindReplaceInFile) Schema() json.RawMessage {
 	}`)
 }
 
-func (FindReplaceInFile) ReadOnly() bool {
-	return false
-}
-
-func (fr FindReplaceInFile) Execute(ctx context.Context, input json.RawMessage) (string, error) {
+func (fr FindReplaceInFile) Prepare(input json.RawMessage) (Call, error) {
 	var params struct {
 		Path    string `json:"path"`
 		OldText string `json:"old_text"`
 		NewText string `json:"new_text"`
 	}
 	if err := json.Unmarshal(input, &params); err != nil {
-		return "", fmt.Errorf("failed to unmarshal input: %w", err)
+		return nil, fmt.Errorf("failed to unmarshal input: %w", err)
 	}
 	resolvedPath, err := fr.Root.ResolvePath(params.Path)
 	if err != nil {
-		return "", fmt.Errorf("failed to resolve path: %w", err)
+		return nil, fmt.Errorf("failed to resolve path: %w", err)
 	}
-	data, err := os.ReadFile(resolvedPath)
-	if err != nil {
-		return "", fmt.Errorf("failed to read file: %w", err)
-	}
-	newData := strings.ReplaceAll(string(data), params.OldText, params.NewText)
-	if err := os.WriteFile(resolvedPath, []byte(newData), 0644); err != nil {
-		return "", fmt.Errorf("failed to write file: %w", err)
-	}
-	lines := strings.Split(newData, "\n")
-	for i, line := range lines {
-		lines[i] = fmt.Sprintf("%d: %s", i+1, line)
-	}
-	return Truncate(strings.Join(lines, "\n")), nil
+	return NewCall(func(ctx context.Context) (string, error) {
+		data, err := os.ReadFile(resolvedPath)
+		if err != nil {
+			return "", fmt.Errorf("failed to read file: %w", err)
+		}
+		newData := strings.ReplaceAll(string(data), params.OldText, params.NewText)
+		if err := os.WriteFile(resolvedPath, []byte(newData), 0644); err != nil {
+			return "", fmt.Errorf("failed to write file: %w", err)
+		}
+		lines := strings.Split(newData, "\n")
+		for i, line := range lines {
+			lines[i] = fmt.Sprintf("%d: %s", i+1, line)
+		}
+		return Truncate(strings.Join(lines, "\n")), nil
+	}, permissions.Access{Op: permissions.OpWrite, Path: resolvedPath}), nil
 }
 
 // grep
@@ -297,64 +293,62 @@ func (Grep) Schema() json.RawMessage {
 	}`)
 }
 
-func (Grep) ReadOnly() bool {
-	return true
-}
-
-func (g Grep) Execute(ctx context.Context, input json.RawMessage) (string, error) {
+func (g Grep) Prepare(input json.RawMessage) (Call, error) {
 	var params struct {
 		Pattern string `json:"pattern"`
 		Path    string `json:"path"`
 	}
 	if err := json.Unmarshal(input, &params); err != nil {
-		return "", fmt.Errorf("failed to unmarshal input: %w", err)
+		return nil, fmt.Errorf("failed to unmarshal input: %w", err)
 	}
 	if params.Path == "" {
 		params.Path = "."
 	}
 	resolvedPath, err := g.Root.ResolvePath(params.Path)
 	if err != nil {
-		return "", fmt.Errorf("failed to resolve path: %w", err)
+		return nil, fmt.Errorf("failed to resolve path: %w", err)
 	}
-	var matches []string
-	err = filepath.WalkDir(resolvedPath, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() || strings.HasPrefix(d.Name(), ".") {
-			return nil // Skip directories and hidden files.
-		}
-		// WalkDir doesn't descend into symlinked directories, but reading a symlink follows it.
-		// Only search symlinks that resolve to regular files inside the workspace.
-		if d.Type()&os.ModeSymlink != 0 {
-			target, err := g.Root.ResolvePath(path)
+	return NewCall(func(ctx context.Context) (string, error) {
+		var matches []string
+		err := filepath.WalkDir(resolvedPath, func(path string, d os.DirEntry, err error) error {
 			if err != nil {
-				return nil
+				return err
 			}
-			if info, err := os.Stat(target); err != nil || !info.Mode().IsRegular() {
-				return nil
+			if d.IsDir() || strings.HasPrefix(d.Name(), ".") {
+				return nil // Skip directories and hidden files.
 			}
-		}
-		data, err := os.ReadFile(path)
+			// WalkDir doesn't descend into symlinked directories, but reading a symlink follows it.
+			// Only search symlinks that resolve to regular files inside the workspace.
+			if d.Type()&os.ModeSymlink != 0 {
+				target, err := g.Root.ResolvePath(path)
+				if err != nil {
+					return nil
+				}
+				if info, err := os.Stat(target); err != nil || !info.Mode().IsRegular() {
+					return nil
+				}
+			}
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			lines := strings.Split(string(data), "\n")
+			for i, line := range lines {
+				if strings.Contains(line, params.Pattern) {
+					relPath, _ := filepath.Rel(g.Root.Dir(), path)
+					matches = append(matches, fmt.Sprintf("%s:%d: %s", relPath, i+1, line))
+				}
+			}
+			return nil
+		})
 		if err != nil {
-			return err
+			return "", fmt.Errorf("failed to search files: %w", err)
 		}
-		lines := strings.Split(string(data), "\n")
-		for i, line := range lines {
-			if strings.Contains(line, params.Pattern) {
-				relPath, _ := filepath.Rel(g.Root.Dir(), path)
-				matches = append(matches, fmt.Sprintf("%s:%d: %s", relPath, i+1, line))
-			}
+		if len(matches) == 0 {
+			return "(no matches found)", nil
 		}
-		return nil
-	})
-	if err != nil {
-		return "", fmt.Errorf("failed to search files: %w", err)
-	}
-	if len(matches) == 0 {
-		return "(no matches found)", nil
-	}
-	return Truncate(strings.Join(matches, "\n")), nil
+		return Truncate(strings.Join(matches, "\n")), nil
+	}, permissions.Access{Op: permissions.OpRead, Path: resolvedPath}), nil
 }
 
 // Create File Tool
@@ -386,35 +380,33 @@ func (CreateFile) Schema() json.RawMessage {
 	}`)
 }
 
-func (CreateFile) ReadOnly() bool {
-	return false
-}
-
-func (cf CreateFile) Execute(ctx context.Context, input json.RawMessage) (string, error) {
+func (cf CreateFile) Prepare(input json.RawMessage) (Call, error) {
 	var params struct {
 		Path     string `json:"path"`
 		Contents string `json:"contents"`
 	}
 	if err := json.Unmarshal(input, &params); err != nil {
-		return "", fmt.Errorf("failed to unmarshal input: %w", err)
+		return nil, fmt.Errorf("failed to unmarshal input: %w", err)
 	}
 	resolvedPath, err := cf.Root.ResolvePath(params.Path)
 	if err != nil {
-		return "", fmt.Errorf("failed to resolve path: %w", err)
+		return nil, fmt.Errorf("failed to resolve path: %w", err)
 	}
-	// Ensure parent directories exist.
-	dir := filepath.Dir(resolvedPath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return "", fmt.Errorf("failed to create parent directories: %w", err)
-	}
-	// Write the file.
-	if err := os.WriteFile(resolvedPath, []byte(params.Contents), 0644); err != nil {
-		return "", fmt.Errorf("failed to write file: %w", err)
-	}
-	// Format with line numbers for consistency with other file tools.
-	lines := strings.Split(params.Contents, "\n")
-	for i, line := range lines {
-		lines[i] = fmt.Sprintf("%d: %s", i+1, line)
-	}
-	return Truncate(strings.Join(lines, "\n")), nil
+	return NewCall(func(ctx context.Context) (string, error) {
+		// Ensure parent directories exist.
+		dir := filepath.Dir(resolvedPath)
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return "", fmt.Errorf("failed to create parent directories: %w", err)
+		}
+		// Write the file.
+		if err := os.WriteFile(resolvedPath, []byte(params.Contents), 0644); err != nil {
+			return "", fmt.Errorf("failed to write file: %w", err)
+		}
+		// Format with line numbers for consistency with other file tools.
+		lines := strings.Split(params.Contents, "\n")
+		for i, line := range lines {
+			lines[i] = fmt.Sprintf("%d: %s", i+1, line)
+		}
+		return Truncate(strings.Join(lines, "\n")), nil
+	}, permissions.Access{Op: permissions.OpWrite, Path: resolvedPath}), nil
 }

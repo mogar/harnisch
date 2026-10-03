@@ -145,7 +145,13 @@ func (a *Agent) execute(ctx context.Context, call chat.ToolUse, out io.Writer) c
 		return errorResult(call, fmt.Sprintf("tool %s not found in %s", call.Name, a.toolNames()))
 	}
 
-	result, err := t.Execute(ctx, call.Input)
+	prepared, err := t.Prepare(call.Input)
+	if err != nil {
+		return errorResult(call, fmt.Sprintf("tool %s rejected input: %v", call.Name, err))
+	}
+
+	// TODO: authorize prepared.Accesses() with the permissions engine before running.
+	result, err := prepared.Run(ctx)
 	if err != nil {
 		return errorResult(call, fmt.Sprintf("tool %s execution failed: %v", call.Name, err))
 	}

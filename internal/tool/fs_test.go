@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/mogar/harnisch/internal/permissions"
 )
 
 // newWorkspace returns a root over <tmp>/ws alongside an <tmp>/outside directory holding a secret file.
@@ -101,7 +103,7 @@ func TestCreateFileThroughSymlinkedDirIsRejected(t *testing.T) {
 	}
 
 	input := json.RawMessage(`{"path":"link/new.txt","contents":"pwned"}`)
-	if _, err := (CreateFile{Root: root}).Execute(context.Background(), input); err == nil {
+	if _, err := runTool(t, CreateFile{Root: root}, input); err == nil {
 		t.Fatal("expected error creating a file through a symlink that leaves the workspace")
 	}
 	if _, err := os.Stat(filepath.Join(outside, "new.txt")); !os.IsNotExist(err) {
@@ -126,7 +128,7 @@ func TestGrepSymlinks(t *testing.T) {
 		}
 	}
 
-	out, err := (Grep{Root: root}).Execute(context.Background(), json.RawMessage(`{"pattern":"secret"}`))
+	out, err := runTool(t, Grep{Root: root}, json.RawMessage(`{"pattern":"secret"}`))
 	if err != nil {
 		t.Fatalf("grep failed: %v", err)
 	}
@@ -137,5 +139,66 @@ func TestGrepSymlinks(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("grep output missing %q:\n%s", want, out)
 		}
+	}
+}
+
+// runTool prepares and runs a tool call the way the agent loop does.
+func runTool(t *testing.T, tl Tool, input json.RawMessage) (string, error) {
+	t.Helper()
+	call, err := tl.Prepare(input)
+	if err != nil {
+		return "", err
+	}
+	return call.Run(context.Background())
+}
+
+func TestPrepareAccesses(t *testing.T) {
+	root, _ := newWorkspace(t)
+	ws := root.Dir()
+	if err := os.WriteFile(filepath.Join(ws, "a.txt"), []byte("hello\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		tool  Tool
+		input string
+		want  permissions.Access
+	}{
+		{ReadFile{Root: root}, `{"path":"a.txt"}`, permissions.Access{Op: permissions.OpRead, Path: filepath.Join(ws, "a.txt")}},
+		{ListDir{Root: root}, `{}`, permissions.Access{Op: permissions.OpRead, Path: ws}},
+		{Grep{Root: root}, `{"pattern":"x"}`, permissions.Access{Op: permissions.OpRead, Path: ws}},
+		{FindReplaceInFile{Root: root}, `{"path":"a.txt","old_text":"h","new_text":"j"}`, permissions.Access{Op: permissions.OpWrite, Path: filepath.Join(ws, "a.txt")}},
+		{CreateFile{Root: root}, `{"path":"d/new.txt"}`, permissions.Access{Op: permissions.OpWrite, Path: filepath.Join(ws, "d/new.txt")}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.tool.Name(), func(t *testing.T) {
+			call, err := tt.tool.Prepare(json.RawMessage(tt.input))
+			if err != nil {
+				t.Fatalf("Prepare: %v", err)
+			}
+			got := call.Accesses()
+			if len(got) != 1 || got[0] != tt.want {
+				t.Errorf("Accesses() = %v, want [%v]", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestPrepareHasNoSideEffects(t *testing.T) {
+	root, _ := newWorkspace(t)
+	target := filepath.Join(root.Dir(), "d", "new.txt")
+
+	call, err := (CreateFile{Root: root}).Prepare(json.RawMessage(`{"path":"d/new.txt","contents":"hi"}`))
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	if _, err := os.Stat(filepath.Dir(target)); !os.IsNotExist(err) {
+		t.Fatalf("Prepare touched the filesystem (stat err: %v)", err)
+	}
+	if _, err := call.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if data, err := os.ReadFile(target); err != nil || string(data) != "hi" {
+		t.Fatalf("Run didn't write the file: %q, %v", data, err)
 	}
 }
