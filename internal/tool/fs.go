@@ -55,6 +55,8 @@ func (r *Root) ResolvePath(path string) (string, error) {
 	return resolved, nil
 }
 
+var _ permissions.Workspace = (*Root)(nil)
+
 // Contains reports whether the absolute, symlink-resolved path is the root or lies beneath it.
 func (r *Root) Contains(path string) bool {
 	rel, err := filepath.Rel(r.dir, path)
