@@ -41,19 +41,49 @@ func (r *Root) ResolvePath(path string) (string, error) {
 	if !filepath.IsAbs(path) {
 		joined = filepath.Join(r.dir, path)
 	}
-	cleaned := filepath.Clean(joined)
-
-	// Support symlinks in the resolved path by resolving them to their real paths.
-	realPath, err := filepath.EvalSymlinks(cleaned)
-	if err == nil {
-		cleaned = realPath
+	resolved, err := resolveSymlinks(filepath.Clean(joined))
+	if err != nil {
+		return "", err
 	}
 
 	// Ensure the resolved path is within the root directory.
-	if !strings.HasPrefix(cleaned, r.dir) {
-		return "", fmt.Errorf("resolved path %q is outside the workspace %q", cleaned, r.dir)
+	if !r.Contains(resolved) {
+		return "", fmt.Errorf("resolved path %q is outside the workspace %q", resolved, r.dir)
 	}
-	return cleaned, nil
+	return resolved, nil
+}
+
+// Contains reports whether the absolute, symlink-resolved path is the root or lies beneath it.
+func (r *Root) Contains(path string) bool {
+	rel, err := filepath.Rel(r.dir, path)
+	if err != nil {
+		return false
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+// resolveSymlinks resolves symlinks in a clean absolute path whose tail may not exist yet (e.g. a file
+// about to be created). The deepest existing ancestor is resolved and the missing components are
+// appended; nothing beneath a missing directory can be a symlink, so the result is where a write lands.
+func resolveSymlinks(path string) (string, error) {
+	var missing []string
+	for {
+		realPath, err := filepath.EvalSymlinks(path)
+		if err == nil {
+			return filepath.Join(append([]string{realPath}, missing...)...), nil
+		}
+		// If the entry exists but can't be resolved (a dangling symlink, a loop, or no permission),
+		// we can't know where it points, so refuse rather than guess.
+		if _, lerr := os.Lstat(path); lerr == nil || !os.IsNotExist(lerr) {
+			return "", fmt.Errorf("failed to resolve path %q: %w", path, err)
+		}
+		parent := filepath.Dir(path)
+		if parent == path {
+			return "", fmt.Errorf("failed to resolve path %q: %w", path, err)
+		}
+		missing = append([]string{filepath.Base(path)}, missing...)
+		path = parent
+	}
 }
 
 // Read File Tool
@@ -293,6 +323,17 @@ func (g Grep) Execute(ctx context.Context, input json.RawMessage) (string, error
 		}
 		if d.IsDir() || strings.HasPrefix(d.Name(), ".") {
 			return nil // Skip directories and hidden files.
+		}
+		// WalkDir doesn't descend into symlinked directories, but reading a symlink follows it.
+		// Only search symlinks that resolve to regular files inside the workspace.
+		if d.Type()&os.ModeSymlink != 0 {
+			target, err := g.Root.ResolvePath(path)
+			if err != nil {
+				return nil
+			}
+			if info, err := os.Stat(target); err != nil || !info.Mode().IsRegular() {
+				return nil
+			}
 		}
 		data, err := os.ReadFile(path)
 		if err != nil {
