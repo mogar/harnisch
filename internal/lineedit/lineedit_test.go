@@ -74,6 +74,31 @@ func TestHistorySkipsInterruptedAndBlank(t *testing.T) {
 	}
 }
 
+func TestReadLineWithPrompt(t *testing.T) {
+	// The answer "y" is read under its own prompt and kept out of history, so
+	// pressing up afterwards recalls "one".
+	var out strings.Builder
+	r := newTerminalReader(strings.NewReader("one\ry\r\x1b[A\r"), &out, "> ")
+
+	if line, err := r.ReadLine(); line != "one" || err != nil {
+		t.Fatalf("ReadLine = (%q, %v)", line, err)
+	}
+	out.Reset()
+	if line, err := r.ReadLineWithPrompt("allow? "); line != "y" || err != nil {
+		t.Fatalf("ReadLineWithPrompt = (%q, %v)", line, err)
+	}
+	if !strings.Contains(out.String(), "allow? ") {
+		t.Errorf("temporary prompt not shown: %q", out.String())
+	}
+	out.Reset()
+	if line, err := r.ReadLine(); line != "one" || err != nil {
+		t.Fatalf("ReadLine after temporary prompt = (%q, %v), want history to skip %q", line, err, "y")
+	}
+	if !strings.Contains(out.String(), "> ") || strings.Contains(out.String(), "allow? ") {
+		t.Errorf("original prompt not restored: %q", out.String())
+	}
+}
+
 func TestHistoryBounded(t *testing.T) {
 	h := &history{in: &interruptReader{}}
 	for i := range maxHistory + 5 {

@@ -12,8 +12,8 @@ import (
 	"github.com/mogar/harnisch/internal/permissions"
 )
 
-// Root defines the intended root directory for tool call. It is used to resolve relative paths in tool definitions.
-// Note that it does not serve a security purpose, and LLMs can still request arbitrary paths.
+// Root is the workspace directory. Tools use it to resolve paths; it does not restrict them. Whether a
+// path inside or outside the workspace may be accessed is decided by the permissions engine.
 type Root struct {
 	dir string
 }
@@ -35,6 +35,8 @@ func (r *Root) Dir() string {
 	return r.dir
 }
 
+// ResolvePath returns the absolute, symlink-resolved form of path, which may be relative to the root.
+// The path may lie outside the workspace.
 func (r *Root) ResolvePath(path string) (string, error) {
 	if path == "" {
 		return "", fmt.Errorf("path cannot be empty")
@@ -43,16 +45,7 @@ func (r *Root) ResolvePath(path string) (string, error) {
 	if !filepath.IsAbs(path) {
 		joined = filepath.Join(r.dir, path)
 	}
-	resolved, err := resolveSymlinks(filepath.Clean(joined))
-	if err != nil {
-		return "", err
-	}
-
-	// Ensure the resolved path is within the root directory.
-	if !r.Contains(resolved) {
-		return "", fmt.Errorf("resolved path %q is outside the workspace %q", resolved, r.dir)
-	}
-	return resolved, nil
+	return resolveSymlinks(filepath.Clean(joined))
 }
 
 var _ permissions.Workspace = (*Root)(nil)
@@ -323,7 +316,7 @@ func (g Grep) Prepare(input json.RawMessage) (Call, error) {
 			// Only search symlinks that resolve to regular files inside the workspace.
 			if d.Type()&os.ModeSymlink != 0 {
 				target, err := g.Root.ResolvePath(path)
-				if err != nil {
+				if err != nil || !g.Root.Contains(target) {
 					return nil
 				}
 				if info, err := os.Stat(target); err != nil || !info.Mode().IsRegular() {

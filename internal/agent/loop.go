@@ -10,15 +10,22 @@ import (
 	"strings"
 
 	"github.com/mogar/harnisch/internal/chat"
+	"github.com/mogar/harnisch/internal/permissions"
 	"github.com/mogar/harnisch/internal/provider"
 	"github.com/mogar/harnisch/internal/tool"
 )
 
+// Authorizer decides whether a prepared tool call may run. *permissions.Engine satisfies it.
+type Authorizer interface {
+	Authorize(ctx context.Context, tool string, accesses []permissions.Access) (permissions.Verdict, error)
+}
+
 type Agent struct {
-	Provider provider.Provider
-	Tools    *tool.Registry
-	System   string
-	MaxTurns int
+	Provider    provider.Provider
+	Tools       *tool.Registry
+	Permissions Authorizer // nil denies every tool call
+	System      string
+	MaxTurns    int
 
 	Messages []chat.Message
 	Usage    provider.Usage // accumulated across the session
@@ -52,13 +59,16 @@ func (a *Agent) Turn(ctx context.Context, userText string, out io.Writer) error 
 		}
 
 		results := make([]chat.Block, 0, len(calls))
+		var stopErr error
 		for _, call := range calls {
 			// check cancellation
-			if ctx.Err() != nil {
+			if stopErr != nil || ctx.Err() != nil {
 				results = append(results, errorResult(call, "cancelled before execution"))
 				continue
 			}
-			results = append(results, a.execute(ctx, call, out))
+			var result chat.Block
+			result, stopErr = a.execute(ctx, call, out)
+			results = append(results, result)
 		}
 
 		a.Messages = append(a.Messages, chat.Message{
@@ -66,6 +76,9 @@ func (a *Agent) Turn(ctx context.Context, userText string, out io.Writer) error 
 			Blocks: results,
 		})
 
+		if stopErr != nil {
+			return stopErr // the user interrupted a permission prompt
+		}
 		if ctx.Err() != nil {
 			return ctx.Err() // cancelled during tool execution
 		}
@@ -137,30 +150,43 @@ func (a *Agent) stream(ctx context.Context, out io.Writer) (chat.Message, error)
 	return msg, err
 }
 
-func (a *Agent) execute(ctx context.Context, call chat.ToolUse, out io.Writer) chat.Block {
+// execute prepares, authorizes, and runs one tool call. Failures are reported to the model in the
+// returned block; a non-nil error means the turn should stop (the permission prompt was interrupted).
+func (a *Agent) execute(ctx context.Context, call chat.ToolUse, out io.Writer) (chat.Block, error) {
 	fmt.Fprintf(out, "\n[tool call: %s %s]\n", call.Name, compact(call.Input))
 
 	t, ok := a.Tools.Get(call.Name)
 	if !ok {
-		return errorResult(call, fmt.Sprintf("tool %s not found in %s", call.Name, a.toolNames()))
+		return errorResult(call, fmt.Sprintf("tool %s not found in %s", call.Name, a.toolNames())), nil
 	}
 
 	prepared, err := t.Prepare(call.Input)
 	if err != nil {
-		return errorResult(call, fmt.Sprintf("tool %s rejected input: %v", call.Name, err))
+		return errorResult(call, fmt.Sprintf("tool %s rejected input: %v", call.Name, err)), nil
 	}
 
-	// TODO: authorize prepared.Accesses() with the permissions engine before running.
+	if a.Permissions == nil {
+		return errorResult(call, "no permissions engine configured; tool calls are disabled"), nil
+	}
+	verdict, err := a.Permissions.Authorize(ctx, call.Name, prepared.Accesses())
+	if err != nil {
+		return errorResult(call, "cancelled while awaiting permission"), err
+	}
+	if !verdict.Allowed {
+		fmt.Fprintln(out, "[denied]")
+		return errorResult(call, verdict.Message), nil
+	}
+
 	result, err := prepared.Run(ctx)
 	if err != nil {
-		return errorResult(call, fmt.Sprintf("tool %s execution failed: %v", call.Name, err))
+		return errorResult(call, fmt.Sprintf("tool %s execution failed: %v", call.Name, err)), nil
 	}
 
 	return chat.ToolResult{
 		ID:      call.ID,
 		Name:    call.Name,
 		Content: tool.Truncate(result),
-	}
+	}, nil
 }
 
 // settleOrphans guarantees every tool call has a tool result. This is necessary for some models.

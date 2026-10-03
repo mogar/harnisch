@@ -16,6 +16,7 @@ import (
 
 	"github.com/mogar/harnisch/internal/agent"
 	"github.com/mogar/harnisch/internal/lineedit"
+	"github.com/mogar/harnisch/internal/permissions"
 	"github.com/mogar/harnisch/internal/provider/ollama"
 	"github.com/mogar/harnisch/internal/tool"
 )
@@ -61,21 +62,32 @@ func run() error {
 		}
 	}
 
+	rl := lineedit.New(os.Stdin, os.Stdout, "> ")
+
+	// Approval prompts need an interactive terminal. Without one the engine has no prompter, so only
+	// reads inside the workspace are allowed.
+	var prompter permissions.Prompter
+	if rl.IsTerminal() {
+		prompter = permissions.NewTerminalPrompter(rl, os.Stdout, root)
+	}
+
 	a := &agent.Agent{
-		Provider: ollama.New(*host, *model),
-		Tools:    registry,
-		System:   defaultSystemPrompt,
+		Provider:    ollama.New(*host, *model),
+		Tools:       registry,
+		Permissions: permissions.NewEngine(root, prompter),
+		System:      defaultSystemPrompt,
 	}
 
 	fmt.Printf("model: %s workspace %s\n", *model, root.Dir())
 	fmt.Println("Ctrl-C cancels the current turn; Ctrl-D or /quit exits.")
+	if prompter == nil {
+		fmt.Println("stdin is not a terminal: tool calls that need approval will be denied.")
+	}
 
 	// Signal handling: SIGINT cancels the turn
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
 	defer signal.Stop(sigCh)
-
-	rl := lineedit.New(os.Stdin, os.Stdout, "> ")
 
 	for {
 		fmt.Println()
@@ -130,6 +142,9 @@ func run() error {
 		close(done)
 		cancel() // always call cancel to avoid context leaks
 
+		if errors.Is(err, permissions.ErrInterrupted) {
+			fmt.Println("[interrupted]") // the prompt already ended its line
+		}
 		fmt.Println()
 		if err != nil && !errors.Is(err, context.Canceled) {
 			fmt.Fprintln(os.Stderr, "turn failed: ", err)

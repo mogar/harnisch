@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/mogar/harnisch/internal/chat"
+	"github.com/mogar/harnisch/internal/permissions"
 	"github.com/mogar/harnisch/internal/provider/ollama"
 	"github.com/mogar/harnisch/internal/tool"
 )
@@ -56,19 +58,62 @@ func toolChunk(name string, args map[string]any) string {
 	return string(b) + "\n"
 }
 
-func newTestAgent(t *testing.T, srv *httptest.Server, root string) *Agent {
+// newTestAgent builds an agent whose permissions engine has the given prompter; nil allows only reads
+// inside the workspace.
+func newTestAgent(t *testing.T, srv *httptest.Server, root string, prompter ...permissions.Prompter) *Agent {
 	t.Helper()
 	r, err := tool.NewRoot(root)
 	if err != nil {
 		t.Fatal(err)
 	}
 	reg := tool.NewRegistry()
-	for _, tl := range []tool.Tool{tool.ReadFile{Root: r}, tool.ListDir{Root: r}} {
+	for _, tl := range []tool.Tool{tool.ReadFile{Root: r}, tool.ListDir{Root: r}, tool.CreateFile{Root: r}} {
 		if err := reg.Register(tl); err != nil {
 			t.Fatal(err)
 		}
 	}
-	return &Agent{Provider: ollama.New(srv.URL, "test-model"), Tools: reg, System: "test"}
+	var p permissions.Prompter
+	if len(prompter) > 0 {
+		p = prompter[0]
+	}
+	return &Agent{
+		Provider:    ollama.New(srv.URL, "test-model"),
+		Tools:       reg,
+		Permissions: permissions.NewEngine(r, p),
+		System:      "test",
+	}
+}
+
+// scriptedPrompter answers permission prompts from a queue, or fails every prompt with err.
+type scriptedPrompter struct {
+	answers []permissions.Answer
+	err     error
+	prompts []permissions.Prompt
+}
+
+func (p *scriptedPrompter) Ask(ctx context.Context, pr permissions.Prompt) (permissions.Answer, error) {
+	p.prompts = append(p.prompts, pr)
+	if p.err != nil || len(p.answers) == 0 {
+		return permissions.Answer{}, p.err
+	}
+	a := p.answers[0]
+	p.answers = p.answers[1:]
+	return a, nil
+}
+
+// toolResults returns the tool results in message i.
+func toolResults(t *testing.T, a *Agent, i int) []chat.ToolResult {
+	t.Helper()
+	if i >= len(a.Messages) {
+		t.Fatalf("no message %d (have %d)", i, len(a.Messages))
+	}
+	var res []chat.ToolResult
+	for _, b := range a.Messages[i].Blocks {
+		if r, ok := b.(chat.ToolResult); ok {
+			res = append(res, r)
+		}
+	}
+	return res
 }
 
 func TestPlainTextTurn(t *testing.T) {
@@ -193,8 +238,107 @@ func TestRootConfinement(t *testing.T) {
 		t.Fatal(err)
 	}
 	res := a.Messages[2].Blocks[0].(chat.ToolResult)
-	if !res.IsError || !strings.Contains(res.Content, "outside the workspace") {
+	if !res.IsError || !strings.Contains(res.Content, "permission denied") {
 		t.Errorf("escape was not blocked: %q", res.Content)
+	}
+}
+
+func TestWriteApproved(t *testing.T) {
+	dir := t.TempDir()
+	srv := fakeOllama(t,
+		toolChunk("create_file", map[string]any{"path": "new.txt", "contents": "hi"})+chunk("", true),
+		chunk("Created.", true),
+	)
+	defer srv.Close()
+
+	p := &scriptedPrompter{answers: []permissions.Answer{{Choice: permissions.AllowOnce}}}
+	a := newTestAgent(t, srv, dir, p)
+	if err := a.Turn(context.Background(), "make a file", &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if len(p.prompts) != 1 || p.prompts[0].Tool != "create_file" {
+		t.Errorf("prompts = %+v, want one for create_file", p.prompts)
+	}
+	if res := toolResults(t, a, 2); len(res) != 1 || res[0].IsError {
+		t.Errorf("tool results = %+v, want one success", res)
+	}
+	if data, err := os.ReadFile(filepath.Join(dir, "new.txt")); err != nil || string(data) != "hi" {
+		t.Errorf("file not written: %q, %v", data, err)
+	}
+}
+
+func TestWriteDeniedIsReportedNotFatal(t *testing.T) {
+	dir := t.TempDir()
+	srv := fakeOllama(t,
+		toolChunk("create_file", map[string]any{"path": "new.txt"})+chunk("", true),
+		chunk("OK, I won't.", true),
+	)
+	defer srv.Close()
+
+	p := &scriptedPrompter{answers: []permissions.Answer{{Choice: permissions.Deny, Reason: "not now"}}}
+	a := newTestAgent(t, srv, dir, p)
+	if err := a.Turn(context.Background(), "make a file", &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	res := toolResults(t, a, 2)
+	if len(res) != 1 || !res[0].IsError || !strings.Contains(res[0].Content, "not now") {
+		t.Errorf("tool results = %+v, want one denial carrying the reason", res)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "new.txt")); !os.IsNotExist(err) {
+		t.Errorf("denied write ran (stat err: %v)", err)
+	}
+	if got := a.Messages[len(a.Messages)-1].TextContent(); got != "OK, I won't." {
+		t.Errorf("turn did not continue after denial: last message %q", got)
+	}
+}
+
+func TestInterruptedPromptStopsTurn(t *testing.T) {
+	dir := t.TempDir()
+	// Two calls in one response: the first prompt is interrupted, so the second never runs.
+	srv := fakeOllama(t,
+		toolChunk("create_file", map[string]any{"path": "a.txt"})+
+			toolChunk("create_file", map[string]any{"path": "b.txt"})+chunk("", true),
+	)
+	defer srv.Close()
+
+	p := &scriptedPrompter{err: permissions.ErrInterrupted}
+	a := newTestAgent(t, srv, dir, p)
+	err := a.Turn(context.Background(), "make files", &bytes.Buffer{})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Turn error = %v, want one wrapping context.Canceled", err)
+	}
+	if len(p.prompts) != 1 {
+		t.Errorf("got %d prompts, want 1", len(p.prompts))
+	}
+	res := toolResults(t, a, 2)
+	if len(res) != 2 || !res[0].IsError || !res[1].IsError {
+		t.Fatalf("tool results = %+v, want two errors", res)
+	}
+	for _, name := range []string{"a.txt", "b.txt"} {
+		if _, err := os.Stat(filepath.Join(dir, name)); !os.IsNotExist(err) {
+			t.Errorf("%s was written after an interrupt (stat err: %v)", name, err)
+		}
+	}
+}
+
+func TestNilPermissionsDeniesTools(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "hello.txt"), []byte("hi"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	srv := fakeOllama(t,
+		toolChunk("read_file", map[string]any{"path": "hello.txt"})+chunk("", true),
+		chunk("Can't.", true),
+	)
+	defer srv.Close()
+
+	a := newTestAgent(t, srv, dir)
+	a.Permissions = nil
+	if err := a.Turn(context.Background(), "read it", &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if res := toolResults(t, a, 2); len(res) != 1 || !res[0].IsError {
+		t.Errorf("tool results = %+v, want one error", res)
 	}
 }
 

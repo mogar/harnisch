@@ -34,10 +34,11 @@ type Reader struct {
 	fd   int
 	hist *history
 
-	// Fallback mode.
-	scan   *bufio.Scanner
-	out    io.Writer
 	prompt string
+
+	// Fallback mode.
+	scan *bufio.Scanner
+	out  io.Writer
 }
 
 // New returns a line editor if in is a terminal, otherwise a plain line
@@ -64,7 +65,32 @@ func newTerminalReader(in io.Reader, out io.Writer, prompt string) *Reader {
 	}{ir, out}, prompt)
 	h := &history{in: ir}
 	t.History = h
-	return &Reader{t: t, in: ir, fd: -1, hist: h}
+	return &Reader{t: t, in: ir, fd: -1, hist: h, prompt: prompt}
+}
+
+// IsTerminal reports whether input comes from an interactive terminal.
+func (r *Reader) IsTerminal() bool {
+	return r.t != nil
+}
+
+// ReadLineWithPrompt reads one line under a temporary prompt and keeps it out of
+// history, for one-off questions asked between regular prompts. It returns the
+// same errors as ReadLine.
+func (r *Reader) ReadLineWithPrompt(prompt string) (string, error) {
+	saved := r.prompt
+	r.prompt = prompt
+	defer func() { r.prompt = saved }()
+	if r.t == nil {
+		return r.ReadLine()
+	}
+
+	r.t.SetPrompt(prompt)
+	r.hist.skip = true
+	defer func() {
+		r.t.SetPrompt(saved)
+		r.hist.skip = false
+	}()
+	return r.ReadLine()
 }
 
 // ReadLine returns the next line, ErrInterrupt on Ctrl-C, or io.EOF on Ctrl-D
@@ -157,10 +183,11 @@ func (ir *interruptReader) Read(p []byte) (int, error) {
 type history struct {
 	in      *interruptReader
 	entries []string // oldest first
+	skip    bool     // drop lines read under a temporary prompt
 }
 
 func (h *history) Add(entry string) {
-	if entry == "" || h.in.interrupted {
+	if entry == "" || h.skip || h.in.interrupted {
 		return
 	}
 	if n := len(h.entries); n > 0 && h.entries[n-1] == entry {

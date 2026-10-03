@@ -61,20 +61,21 @@ func TestResolvePath(t *testing.T) {
 		name    string
 		path    string
 		want    string
+		inside  bool
 		wantErr bool
 	}{
-		{name: "root", path: ".", want: ws},
-		{name: "relative existing", path: "sub", want: filepath.Join(ws, "sub")},
-		{name: "relative missing", path: "new.txt", want: filepath.Join(ws, "new.txt")},
-		{name: "missing nested dirs", path: "a/b/c.txt", want: filepath.Join(ws, "a/b/c.txt")},
-		{name: "symlink inside", path: "inlink/new.txt", want: filepath.Join(ws, "sub/new.txt")},
-		{name: "absolute inside", path: filepath.Join(ws, "sub"), want: filepath.Join(ws, "sub")},
+		{name: "root", path: ".", want: ws, inside: true},
+		{name: "relative existing", path: "sub", want: filepath.Join(ws, "sub"), inside: true},
+		{name: "relative missing", path: "new.txt", want: filepath.Join(ws, "new.txt"), inside: true},
+		{name: "missing nested dirs", path: "a/b/c.txt", want: filepath.Join(ws, "a/b/c.txt"), inside: true},
+		{name: "symlink inside", path: "inlink/new.txt", want: filepath.Join(ws, "sub/new.txt"), inside: true},
+		{name: "absolute inside", path: filepath.Join(ws, "sub"), want: filepath.Join(ws, "sub"), inside: true},
+		{name: "dotdot escape", path: "../outside/secret.txt", want: filepath.Join(outside, "secret.txt")},
+		{name: "absolute outside", path: filepath.Join(outside, "secret.txt"), want: filepath.Join(outside, "secret.txt")},
+		{name: "sibling with shared prefix", path: filepath.Join(base, "ws2"), want: filepath.Join(base, "ws2")},
+		{name: "missing file under symlinked dir", path: "outlink/new.txt", want: filepath.Join(outside, "new.txt")},
+		{name: "missing nested under symlinked dir", path: "outlink/a/b.txt", want: filepath.Join(outside, "a/b.txt")},
 		{name: "empty", path: "", wantErr: true},
-		{name: "dotdot escape", path: "../outside/secret.txt", wantErr: true},
-		{name: "absolute outside", path: filepath.Join(outside, "secret.txt"), wantErr: true},
-		{name: "sibling with shared prefix", path: filepath.Join(base, "ws2"), wantErr: true},
-		{name: "missing file under symlinked dir", path: "outlink/new.txt", wantErr: true},
-		{name: "missing nested under symlinked dir", path: "outlink/a/b.txt", wantErr: true},
 		{name: "dangling symlink", path: "dangling", wantErr: true},
 	}
 	for _, tt := range tests {
@@ -92,22 +93,31 @@ func TestResolvePath(t *testing.T) {
 			if got != tt.want {
 				t.Errorf("ResolvePath(%q) = %q, want %q", tt.path, got, tt.want)
 			}
+			if inside := root.Contains(got); inside != tt.inside {
+				t.Errorf("Contains(%q) = %v, want %v", got, inside, tt.inside)
+			}
 		})
 	}
 }
 
-func TestCreateFileThroughSymlinkedDirIsRejected(t *testing.T) {
+// A write through a symlinked directory must report where it really lands, so the permissions engine
+// sees it as outside the workspace.
+func TestCreateFileThroughSymlinkedDirReportsRealPath(t *testing.T) {
 	root, outside := newWorkspace(t)
 	if err := os.Symlink(outside, filepath.Join(root.Dir(), "link")); err != nil {
 		t.Fatal(err)
 	}
 
-	input := json.RawMessage(`{"path":"link/new.txt","contents":"pwned"}`)
-	if _, err := runTool(t, CreateFile{Root: root}, input); err == nil {
-		t.Fatal("expected error creating a file through a symlink that leaves the workspace")
+	call, err := (CreateFile{Root: root}).Prepare(json.RawMessage(`{"path":"link/new.txt","contents":"x"}`))
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(outside, "new.txt")); !os.IsNotExist(err) {
-		t.Fatalf("file was written outside the workspace (stat err: %v)", err)
+	want := permissions.Access{Op: permissions.OpWrite, Path: filepath.Join(outside, "new.txt")}
+	if got := call.Accesses(); len(got) != 1 || got[0] != want {
+		t.Errorf("Accesses() = %v, want [%v]", got, want)
+	}
+	if root.Contains(want.Path) {
+		t.Errorf("Contains(%q) = true, want false", want.Path)
 	}
 }
 
